@@ -19,21 +19,17 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Vendor sherpa-onnx shared libraries
+      - name: Verify vendored sherpa-onnx dylibs
+        # The dylibs are committed to vendor/sherpa-onnx/lib (override of
+        # the .gitignore default) so the release pipeline does not depend
+        # on any external download at build time.
         run: |
           set -euo pipefail
-          # GITHUB_TOKEN is auto-provided to Actions runners and lifts the
-          # 60/hr anonymous-API rate limit on GET /repos/.../releases/latest.
-          URL=$(curl -fsSL \
-            -H "Authorization: token $GITHUB_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/k2-fsa/sherpa-onnx/releases/latest" \
-            | python3 -c "import sys,json;d=json.load(sys.stdin);
-          print(next(a['browser_download_url'] for a in d['assets']
-                       if 'osx-universal2-shared-lib' in a['name']))")
-          [ -n "$URL" ] || { echo "sherpa-onnx asset not found"; exit 1; }
-          echo "sherpa libs asset: $URL"
-          SHERPA_LIBS_URL="$URL" ./scripts/download-models.sh --libs-only
+          ls -la vendor/sherpa-onnx/lib/
+          test -s vendor/sherpa-onnx/lib/libsherpa-onnx-c-api.dylib
+          # Refresh ad-hoc codesigning in CI (macOS gates want this even
+          # though the binary is identical to the repository copy).
+          for f in vendor/sherpa-onnx/lib/*.dylib; do codesign -f -s - "$f"; done
 
       - name: Build release binaries
         run: cargo build --release --locked -p parrots-cli -p parrots-app
