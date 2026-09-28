@@ -4113,6 +4113,7 @@ name = "parrots-app"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "cpal",
  "crossbeam-channel",
  "eframe",
  "egui",
@@ -4122,6 +4123,8 @@ dependencies = [
  "parrots-pipeline",
  "parrots-platform-macos",
  "parrots-polish-qwen",
+ "parrots-tts-zipvoice",
+ "parrots-vad",
  "serde",
  "serde_json",
  "tokio",

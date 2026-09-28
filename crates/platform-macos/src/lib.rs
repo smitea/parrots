@@ -75,7 +75,7 @@ impl Drop for StreamGuard {
 
 /// Parrots-branded virtual device names (dual-sided: input+output; Plan 3+,
 /// branded fork of the official driver)
-const PARROTS_DEVICE_NAMES: [&str; 2] = ["Parrots Microphone", "Parrots Speakers"];
+pub const PARROTS_DEVICE_NAMES: [&str; 2] = ["Parrots Microphone", "Parrots Speakers"];
 
 /// Enumerates all audio device names (input + output; order-preserving dedup)
 pub fn device_names() -> Vec<String> {

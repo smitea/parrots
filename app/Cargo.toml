@@ -24,3 +24,6 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 crossbeam-channel = "0.5"
+cpal.workspace = true
+parrots-vad = { path = "../crates/vad" }
+parrots-tts-zipvoice = { path = "../crates/tts-zipvoice" }
