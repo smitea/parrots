@@ -4,6 +4,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod captions;
 mod doctor_ui;
 mod enroll_ui;
 mod settings;
@@ -12,7 +13,7 @@ mod tray;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use eframe::egui;
 use parrots_core::{DeviceId, Lang};
@@ -95,6 +96,17 @@ struct ParrotsApp {
     tab: Tab,
     health_checks: Option<Vec<doctor_ui::Check>>,
     quit_requested: bool,
+    captions: captions::SharedCaptions,
+    stats: VecDeque<StatSample>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct StatSample {
+    asr_ms: f64,
+    mt_ms: f64,
+    tts_ms: f64,
+    first_audio_ms: f64,
+    e2e_ms: f64,
 }
 
 impl ParrotsApp {
@@ -119,6 +131,11 @@ impl ParrotsApp {
             tab: Tab::Settings,
             health_checks: None,
             quit_requested: false,
+            captions: Arc::new(Mutex::new(captions::CaptionState {
+                enabled: true,
+                ..Default::default()
+            })),
+            stats: VecDeque::new(),
         }
     }
 
@@ -282,11 +299,33 @@ impl ParrotsApp {
             match ev {
                 AppEvent::Service(ServiceEvent::Transcribed(t)) => {
                     self.log(format!("recognised: {t}"));
+                    let mut cap = self.captions.lock().unwrap_or_else(|e| e.into_inner());
+                    cap.source = t;
                 }
                 AppEvent::Service(ServiceEvent::Translated(t)) => {
                     self.log(format!("translated: {t}"));
+                    let mut cap = self.captions.lock().unwrap_or_else(|e| e.into_inner());
+                    cap.translated = t;
                 }
                 AppEvent::Service(ServiceEvent::Speaking) => {}
+                AppEvent::Service(ServiceEvent::Stats {
+                    asr_ms,
+                    mt_ms,
+                    tts_ms,
+                    first_audio_ms,
+                    e2e_ms,
+                }) => {
+                    self.stats.push_back(StatSample {
+                        asr_ms,
+                        mt_ms,
+                        tts_ms,
+                        first_audio_ms,
+                        e2e_ms,
+                    });
+                    while self.stats.len() > 10 {
+                        self.stats.pop_front();
+                    }
+                }
                 AppEvent::Enroll(msg) => self.log(format!("enroll: {msg}")),
                 AppEvent::EnrollDone(result) => {
                     self.enroll_busy = false;
@@ -362,6 +401,10 @@ impl ParrotsApp {
             &mut self.settings.polish,
             "LLM text polisher (needs the polish model)",
         );
+        {
+            let mut cap = self.captions.lock().unwrap_or_else(|e| e.into_inner());
+            ui.checkbox(&mut cap.enabled, "Caption overlay (direction B)");
+        }
         ui.horizontal(|ui| {
             ui.label("Playback gate (A):");
             let mut gate = self.settings.gate_playback;
@@ -389,6 +432,32 @@ impl ParrotsApp {
                     self.stop_direction(Direction::B);
                 });
         });
+
+        // --- latency panel (last 10 clauses) ---
+        if !self.stats.is_empty() {
+            ui.add_space(8.0);
+            ui.label("Latency (mean of recent clauses)");
+            let sum = self.stats.iter().fold([0.0f64; 5], |acc, s| {
+                [
+                    acc[0] + s.asr_ms,
+                    acc[1] + s.mt_ms,
+                    acc[2] + s.tts_ms,
+                    acc[3] + s.first_audio_ms,
+                    acc[4] + s.e2e_ms,
+                ]
+            });
+            let n = self.stats.len() as f64;
+            let labels = ["asr", "mt", "tts", "first audio", "e2e"];
+            let max = sum[4] / n;
+            for (i, label) in labels.iter().enumerate() {
+                let v = sum[i] / n;
+                let frac = if max > 0.0 { (v / max).min(1.0) } else { 0.0 };
+                ui.horizontal(|ui| {
+                    ui.monospace(format!("{label:>11} {v:7.0}ms"));
+                    ui.add(egui::ProgressBar::new(frac as f32).desired_height(10.0));
+                });
+            }
+        }
 
         // --- event log ---
         ui.add_space(8.0);
@@ -452,6 +521,8 @@ impl eframe::App for ParrotsApp {
         }
         // Polling keeps tray events and service events flowing.
         ctx.request_repaint_after(std::time::Duration::from_millis(250));
+
+        captions::show(ctx, &self.captions);
 
         egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
             ui.horizontal(|ui| {

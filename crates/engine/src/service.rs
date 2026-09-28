@@ -154,6 +154,14 @@ pub enum ServiceEvent {
     Translated(String),
     /// Synthesized audio started playing (playback gate engaged)
     Speaking,
+    /// Per-clause stage timings (ms), for latency dashboards
+    Stats {
+        asr_ms: f64,
+        mt_ms: f64,
+        tts_ms: f64,
+        first_audio_ms: f64,
+        e2e_ms: f64,
+    },
 }
 
 /// Incremental pipeline output (handed back to the caller on exit for persistence/reporting).
@@ -560,6 +568,15 @@ pub async fn run_incremental_live(
                 "e2e",
                 (t0.elapsed().as_millis() as u64).saturating_sub(msg.spoken_at_ms) as f64,
             );
+            if let Some(cb) = &on_event {
+                cb(ServiceEvent::Stats {
+                    asr_ms: StageTimings::mean(&timings.asr_ms),
+                    mt_ms: StageTimings::mean(&timings.mt_ms),
+                    tts_ms: StageTimings::mean(&timings.tts_ms),
+                    first_audio_ms: StageTimings::mean(&timings.first_audio_ms),
+                    e2e_ms: StageTimings::mean(&timings.e2e_ms),
+                });
+            }
             if collect {
                 collected.push(audio);
             }
