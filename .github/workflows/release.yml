@@ -20,20 +20,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Vendor sherpa-onnx shared libraries
+        # sherpa-onnx publishes a macOS universal2 dylib tarball on every
+        # release. Use GitHub's direct asset URL (no auth, CDN, no rate
+        # limit). If upstream ever renames the asset, bump the literal below.
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        # Resolve the macOS universal2 shared-libs tarball URL via the gh CLI
-        # (authenticated through GITHUB_TOKEN) and pass it to the download
-        # script so we don't hit the anonymous 60/hr/IP rate limit.
-        run: |
-          set -euo pipefail
-          URL=$(gh release view --repo k2-fsa/sherpa-onnx --json assets \
-            -q '.assets[].browser_download_url' \
-            | grep 'osx-universal2-shared-lib.*\.tar\.bz2' \
-            | head -n1)
-          [ -n "$URL" ] || { echo "sherpa-onnx asset not found"; exit 1; }
-          echo "sherpa libs asset: $URL"
-          SHERPA_LIBS_URL="$URL" ./scripts/download-models.sh --libs-only
+          SHERPA_LIBS_URL: "https://github.com/k2-fsa/sherpa-onnx/releases/latest/download/sherpa-onnx-osx-universal2-shared-lib.tar.bz2"
+        run: ./scripts/download-models.sh --libs-only
 
       - name: Build release binaries
         run: cargo build --release --locked -p parrots-cli -p parrots-app
@@ -47,15 +39,11 @@ jobs:
 
       # Create source tarball that includes both the git tree and the
       # vendored sherpa dylibs (required for Homebrew source builds).
-      # Uses portable POSIX tar / gzip instead of GNU tar `--transform`
-      # because GitHub's macOS runners ship BSD tar without that flag.
+      # BSD tar (no GNU tar) on macos-14: use a worktree we then rename
+      # under the versioned prefix, and cp -R (no rsync on this image).
       - name: Create source tarball (includes vendored dylibs)
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          # Stage a clean tree at /tmp/parrots-${VERSION} with the vendored
-          # dylibs layered on top. git worktree gives us HEAD's pristine
-          # contents (vendor/ is gitignored, so the worktree has none);
-          # we rename it under the versioned prefix the tarball expects.
           WORKTREE="/tmp/parrots-wt"
           STAGE="/tmp/parrots-${VERSION}"
           mkdir -p "$(dirname "$STAGE")"
@@ -63,9 +51,6 @@ jobs:
           mv "$WORKTREE" "$STAGE"
           mkdir -p "$STAGE/vendor/sherpa-onnx/lib"
           cp -R vendor/sherpa-onnx/lib/. "$STAGE/vendor/sherpa-onnx/lib/"
-          # git worktree bookkeeping (worktree is now under $STAGE; clean
-          # it up to avoid the "worktree contains modified files" warning)
-          git -C "$STAGE" worktree remove --force "$WORKTREE" 2>/dev/null || git -C "$STAGE" worktree prune || true
           tar -C /tmp -czf "parrots-${VERSION}.tar.gz" "parrots-${VERSION}"
           rm -rf "$STAGE"
           shasum -a 256 "parrots-${VERSION}.tar.gz" | tee sha256-src.txt
