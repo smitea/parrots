@@ -52,14 +52,22 @@ jobs:
       - name: Create source tarball (includes vendored dylibs)
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          git worktree add --detach "/tmp/parrots-stage" HEAD
-          rm -rf "/tmp/parrots-stage/vendor/sherpa-onnx/lib"
-          # Re-add the freshly vendored dylibs on top of the pristine tree.
-          # cp -R instead of rsync: macos-14 runners do not ship rsync.
-          mkdir -p "/tmp/parrots-stage/vendor/sherpa-onnx/lib"
-          cp -R vendor/sherpa-onnx/lib/. "/tmp/parrots-stage/vendor/sherpa-onnx/lib/"
-          tar -C "/tmp" -czf "parrots-${VERSION}.tar.gz" "parrots-stage/parrots-${VERSION}/"
-          git worktree remove --force /tmp/parrots-stage
+          # Stage a clean tree at /tmp/parrots-${VERSION} with the vendored
+          # dylibs layered on top. git worktree gives us HEAD's pristine
+          # contents (vendor/ is gitignored, so the worktree has none);
+          # we rename it under the versioned prefix the tarball expects.
+          WORKTREE="/tmp/parrots-wt"
+          STAGE="/tmp/parrots-${VERSION}"
+          mkdir -p "$(dirname "$STAGE")"
+          git worktree add --detach "$WORKTREE" HEAD
+          mv "$WORKTREE" "$STAGE"
+          mkdir -p "$STAGE/vendor/sherpa-onnx/lib"
+          cp -R vendor/sherpa-onnx/lib/. "$STAGE/vendor/sherpa-onnx/lib/"
+          # git worktree bookkeeping (worktree is now under $STAGE; clean
+          # it up to avoid the "worktree contains modified files" warning)
+          git -C "$STAGE" worktree remove --force "$WORKTREE" 2>/dev/null || git -C "$STAGE" worktree prune || true
+          tar -C /tmp -czf "parrots-${VERSION}.tar.gz" "parrots-${VERSION}"
+          rm -rf "$STAGE"
           shasum -a 256 "parrots-${VERSION}.tar.gz" | tee sha256-src.txt
           shasum -a 256 "driver/macos/build/ParrotsAudio-${VERSION}.pkg" | tee sha256-pkg.txt
 
