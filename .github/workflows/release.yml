@@ -21,17 +21,16 @@ jobs:
 
       - name: Vendor sherpa-onnx shared libraries
         env:
-          SHERPA_LIBS_URL: |
-            TAG=$(curl -fsSL -H "Authorization: token $GITHUB_TOKEN" \
-              https://api.github.com/repos/k2-fsa/sherpa-onnx/releases/latest \
-              | python3 -c "import sys,json; print(json.load(sys.stdin)['tag_name'])")
-            # Pick the macOS universal2 shared-libs tarball (contains the
-            # dylibs parrots links against + re-signs with `codesign -s -`).
-            curl -fsSL -H "Authorization: token $GITHUB_TOKEN" \
-              https://api.github.com/repos/k2-fsa/sherpa-onnx/releases/tags/"$TAG" \
-              | python3 -c "import sys,json,urllib.request;
-            [print(a['browser_download_url']) for a in json.load(sys.stdin)['assets'] if 'osx-universal2-shared-lib' in a['name'] and a['name'].endswith('.tar.bz2')]"
-        run: ./scripts/download-models.sh --libs-only
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Resolve the macOS universal2 shared-libs tarball URL via the gh CLI
+        # (authenticated through GITHUB_TOKEN) and pass it to the download
+        # script so we don't hit the anonymous 60/hr/IP rate limit.
+        run: |
+          set -euo pipefail
+          URL=$(gh release view --repo k2-fsa/sherpa-onnx --json assets --jq             '.assets[] | select(.name | test("osx-universal2-shared-lib";"")) | .url' | head -n1)
+          [ -n "$URL" ] || { echo "sherpa-onnx asset not found"; exit 1; }
+          echo "sherpa libs asset: $URL"
+          SHERPA_LIBS_URL="$URL" ./scripts/download-models.sh --libs-only
 
       - name: Build release binaries
         run: cargo build --release --locked -p parrots-cli -p parrots-app
