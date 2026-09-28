@@ -19,6 +19,15 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # macos-14 image ships Xcode CLT only; cmake/openssl/cargo-c need
+      # explicit install (whisper-rs and sherpa-onnx build native code).
+      - name: Install native build deps
+        run: |
+          brew install cmake pkg-config openssl@3
+          echo "$HOMEBREW_PREFIX/opt/openssl@3/lib" >> $GITHUB_PATH
+          export PATH="$HOMEBREW_PREFIX/opt/openssl@3/bin:$PATH"
+          openssl version
+
       - name: Verify vendored sherpa-onnx dylibs
         # The dylibs are committed to vendor/sherpa-onnx/lib (override of
         # the .gitignore default) so the release pipeline does not depend
