@@ -100,10 +100,15 @@ fi
 fi  # end of --libs-only skip (models)
 
 # 6) sherpa-onnx shared libraries (macOS universal2)
-# v1.13.x asset name is osx-universal2-shared-lib.tar.bz2 (older releases: shared-libs)
+# v1.13.x asset name is osx-universal2-shared-lib.tar.bz2 (older releases: shared-libs).
+# CI can pass SHERPA_LIBS_URL to avoid the unauthenticated API rate limit.
 if [ ! -s vendor/sherpa-onnx/lib/libsherpa-onnx-c-api.dylib ]; then
-  LIB_URL=$(net_curl -sL https://api.github.com/repos/k2-fsa/sherpa-onnx/releases/latest \
-    | grep -o 'https://[^"]*osx-universal2-shared-lib[^"]*\.tar\.bz2' | head -1 || true)
+  if [ -n "${SHERPA_LIBS_URL:-}" ]; then
+    LIB_URL="$SHERPA_LIBS_URL"
+  else
+    LIB_URL=$(net_curl -sL https://api.github.com/repos/k2-fsa/sherpa-onnx/releases/latest \
+      | grep -o 'https://[^"]*osx-universal2-shared-lib[^"]*\.tar\.bz2' | head -1 || true)
+  fi
   [ -n "$LIB_URL" ] || { echo "shared-libs asset not found; check the releases page"; exit 1; }
   echo "sherpa libs asset: $LIB_URL"
   net_curl -L --fail --retry 3 --retry-all-errors -o "$WORK/sherpa-libs.tar.bz2" "$LIB_URL"

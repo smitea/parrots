@@ -20,6 +20,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Vendor sherpa-onnx shared libraries
+        env:
+          SHERPA_LIBS_URL: |
+            TAG=$(curl -fsSL -H "Authorization: token $GITHUB_TOKEN" \
+              https://api.github.com/repos/k2-fsa/sherpa-onnx/releases/latest \
+              | python3 -c "import sys,json; print(json.load(sys.stdin)['tag_name'])")
+            # Pick the macOS universal2 shared-libs tarball (contains the
+            # dylibs parrots links against + re-signs with `codesign -s -`).
+            curl -fsSL -H "Authorization: token $GITHUB_TOKEN" \
+              https://api.github.com/repos/k2-fsa/sherpa-onnx/releases/tags/"$TAG" \
+              | python3 -c "import sys,json,urllib.request;
+            [print(a['browser_download_url']) for a in json.load(sys.stdin)['assets'] if 'osx-universal2-shared-lib' in a['name'] and a['name'].endswith('.tar.bz2')]"
         run: ./scripts/download-models.sh --libs-only
 
       - name: Build release binaries
