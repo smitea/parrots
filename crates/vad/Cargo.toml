@@ -1,0 +1,13 @@
+[package]
+name = "parrots-vad"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+parrots-core = { path = "../core" }
+ort.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+hound.workspace = true

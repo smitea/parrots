@@ -1,0 +1,15 @@
+[package]
+name = "parrots-asr-whisper"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+parrots-core = { path = "../core" }
+whisper-rs.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+hound.workspace = true

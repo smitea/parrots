@@ -1,0 +1,13 @@
+[package]
+name = "parrots-core"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

@@ -1,0 +1,17 @@
+[package]
+name = "parrots-pipeline"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+tracing.workspace = true
+parrots-core = { path = "../core" }
+tokio.workspace = true
+serde.workspace = true
+hound.workspace = true
+pinyin.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tempfile.workspace = true
+async-trait.workspace = true

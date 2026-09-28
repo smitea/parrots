@@ -1,0 +1,12 @@
+[package]
+name = "parrots-platform-macos"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+parrots-core = { path = "../core" }
+cpal.workspace = true
+coreaudio-sys.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]

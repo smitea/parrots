@@ -1,0 +1,11 @@
+[package]
+name = "parrots-engine"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+parrots-core = { path = "../core" }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+async-trait.workspace = true

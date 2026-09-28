@@ -1,0 +1,17 @@
+[package]
+name = "parrots-asr-sensevoice"
+edition.workspace = true
+version.workspace = true
+# 注意:不加 links = "sherpa-onnx-c-api" —— 该键全 workspace 唯一,tts-zipvoice 已占用;
+# 本 crate 的 build.rs 自行发出相同的 link-search/link-lib 指令,重复指令无害。
+build = "build.rs"
+
+[dependencies]
+parrots-core = { path = "../core" }
+tokio.workspace = true
+async-trait.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+hound.workspace = true

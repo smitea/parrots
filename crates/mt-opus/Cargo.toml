@@ -1,0 +1,16 @@
+[package]
+name = "parrots-mt-opus"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+parrots-core = { path = "../core" }
+ort.workspace = true
+tokenizers.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

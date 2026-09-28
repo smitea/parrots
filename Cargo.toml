@@ -1,0 +1,42 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/vad",
+    "crates/asr-whisper",
+    "crates/asr-sensevoice",
+    "crates/mt-opus",
+    "crates/tts-zipvoice",
+    "crates/polish-qwen",
+    "crates/pipeline",
+    "crates/platform-macos",
+    "crates/engine",
+    "apps/translator-cli",
+]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+license = "MIT"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+thiserror = "2"
+anyhow = "1"
+ort = "=2.0.0-rc.10"
+whisper-rs = { version = "0.14", features = ["metal"] }
+tokenizers = "0.21"
+hound = "3.5"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+cpal = "0.15"
+coreaudio-sys = { version = "0.2", features = ["audio_unit", "core_audio"] }
+tempfile = "3"
+pinyin = "0.10"
+
+[profile.release]
+lto = "thin"

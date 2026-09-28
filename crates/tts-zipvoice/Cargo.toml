@@ -1,0 +1,15 @@
+[package]
+name = "parrots-tts-zipvoice"
+edition.workspace = true
+version.workspace = true
+links = "sherpa-onnx-c-api"
+build = "build.rs"
+
+[dependencies]
+parrots-core = { path = "../core" }
+tokio.workspace = true
+async-trait.workspace = true
+hound.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

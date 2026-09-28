@@ -1,0 +1,35 @@
+[package]
+name = "parrots-cli"
+edition.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "parrots"
+path = "src/main.rs"
+
+[dependencies]
+parrots-core = { path = "../../crates/core" }
+parrots-vad = { path = "../../crates/vad" }
+parrots-asr-whisper = { path = "../../crates/asr-whisper" }
+parrots-asr-sensevoice = { path = "../../crates/asr-sensevoice" }
+parrots-mt-opus = { path = "../../crates/mt-opus" }
+parrots-tts-zipvoice = { path = "../../crates/tts-zipvoice" }
+parrots-polish-qwen = { path = "../../crates/polish-qwen" }
+parrots-pipeline = { path = "../../crates/pipeline" }
+parrots-platform-macos = { path = "../../crates/platform-macos" }
+parrots-engine = { path = "../../crates/engine" }
+tokio.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+hound.workspace = true
+anyhow.workspace = true
+tempfile.workspace = true
+cpal.workspace = true
+
+[dev-dependencies]
+assert_cmd = "2"
+hound.workspace = true
+serde_json.workspace = true
