@@ -32,16 +32,23 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           ./make-pkg.sh "$VERSION"
 
+      # Create source tarball that includes both the git tree and the
+      # vendored sherpa dylibs (required for Homebrew source builds).
+      # Uses portable POSIX tar / gzip instead of GNU tar `--transform`
+      # because GitHub's macOS runners ship BSD tar without that flag.
       - name: Create source tarball (includes vendored dylibs)
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          git archive --format=tar --prefix="parrots-$VERSION/" HEAD -o "parrots-$VERSION.tar"
-          tar -rf "parrots-$VERSION.tar" \
-            --transform "s|^vendor|parrots-$VERSION/vendor|" \
-            vendor/sherpa-onnx/lib
-          gzip "parrots-$VERSION.tar"
-          shasum -a 256 "parrots-$VERSION.tar.gz" | tee sha256-src.txt
-          shasum -a 256 "driver/macos/build/ParrotsAudio-$VERSION.pkg" | tee sha256-pkg.txt
+          git worktree add --detach "/tmp/parrots-stage" HEAD
+          rm -rf "/tmp/parrots-stage/vendor/sherpa-onnx/lib"
+          # Re-add the freshly vendored dylibs on top of the pristine tree:
+          rsync -a --delete \
+            vendor/sherpa-onnx/lib/ \
+            "/tmp/parrots-stage/vendor/sherpa-onnx/lib/"
+          tar -C "/tmp" -czf "parrots-${VERSION}.tar.gz" "parrots-stage/parrots-${VERSION}/"
+          git worktree remove --force /tmp/parrots-stage
+          shasum -a 256 "parrots-${VERSION}.tar.gz" | tee sha256-src.txt
+          shasum -a 256 "driver/macos/build/ParrotsAudio-${VERSION}.pkg" | tee sha256-pkg.txt
 
       - name: Show artifacts and checksums
         run: |
@@ -63,6 +70,6 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           SRC_SHA=$(awk '{print $1}' sha256-src.txt)
           PKG_SHA=$(awk '{print $1}' sha256-pkg.txt)
-          echo "::notice::Update the tap formula/cask:"
+          echo "::notice::Update the tap formula/cask with:"
           echo "  formula url sha256 = $SRC_SHA"
           echo "  cask   url sha256 = $PKG_SHA"
