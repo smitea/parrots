@@ -12,8 +12,10 @@ profiles/**
 
 # Exception: shipped sherpa-onnx dylibs for the release pipeline to
 # bundle into the source tarball without a runtime download.
+!vendor/sherpa-onnx/
 !vendor/sherpa-onnx/lib/
 !vendor/sherpa-onnx/lib/*.dylib
+!vendor/sherpa-onnx/lib/.*.dylib
 # driver build products
 driver/macos/build/
 
