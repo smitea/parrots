@@ -1,7 +1,7 @@
 class Parrots < Formula
   desc "Real-time on-device speech-to-speech translation for macOS"
-  homepage "https://github.com/YOUR_GH_USER/parrots"
-  url "https://github.com/YOUR_GH_USER/parrots/releases/download/v#{version}/parrots-#{version}.tar.gz"
+  homepage "https://github.com/smitea/parrots"
+  url "https://github.com/smitea/parrots/releases/download/v#{version}/parrots-#{version}.tar.gz"
   version "0.1.0"
   sha256 "replace_with_release_sha256" # printed by the release workflow
   license "MIT"
@@ -35,12 +35,12 @@ class Parrots < Formula
       Speech models are NOT installed by this formula (~2 GB, local inference).
       Download them once with:
 
-        git clone https://github.com/YOUR_GH_USER/parrots.git
+        git clone https://github.com/smitea/parrots.git
         cd parrots && ./scripts/download-models.sh
 
       Meeting apps must use "Parrots Microphone" as their microphone and
       "Parrots Speakers" as their speaker; install the virtual audio driver
-      with:  brew install --cask YOUR_GH_USER/parrots/parrots-audio
+      with:  brew install --cask smitea/parrots/parrots-audio
       Run `parrots doctor` to verify the setup.
     EOS
   end

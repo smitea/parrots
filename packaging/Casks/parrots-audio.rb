@@ -2,10 +2,10 @@ cask "parrots-audio" do
   version "0.1.0"
   sha256 "REPLACE_WITH_RELEASE_SHA256" # printed by the release workflow
 
-  url "https://github.com/YOUR_GH_USER/parrots/releases/download/v#{version}/ParrotsAudio-#{version}.pkg"
+  url "https://github.com/smitea/parrots/releases/download/v#{version}/ParrotsAudio-#{version}.pkg"
   name "Parrots Audio Driver"
   desc "Virtual audio devices for the Parrots translator"
-  homepage "https://github.com/YOUR_GH_USER/parrots"
+  homepage "https://github.com/smitea/parrots"
 
   livecheck do
     url :homepage
