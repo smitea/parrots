@@ -41,6 +41,9 @@ synthesis, and (optionally) an LLM text-correction pass. No cloud services.
   proper nouns (e.g. `稀有記` → `西游记`) before translation
 - **Health check**: `parrots doctor` verifies devices, models, voice profiles
   and hotwords in one shot
+- **Menubar app**: tray-resident GUI (`parrots-app`) — health-check tab,
+  settings (devices, voice enrollment, AEC/polisher toggles), start/stop for
+  both directions, live caption overlay and a latency panel
 - **Latency gates in CI**: first-audio ≤2.5s on fixture benchmarks; every
   stage timed and reported
 
@@ -111,6 +114,23 @@ parrots talk --from zh --to en
 parrots talk --live --device "Parrots Microphone"
 parrots live --device "Parrots Speakers"
 ```
+
+### Menubar app
+
+```bash
+cargo run --release -p parrots-app
+```
+
+The app lives in the system tray. The window offers:
+
+- **Settings** — voice profile (record it from the app), capture/playback
+  devices, echo cancellation and text polisher toggles, playback-gate
+  override, start/stop for each direction, live event log
+- **Health check** — the same checks as `parrots doctor`
+- **Caption overlay** — borderless always-on-top window with the remote
+  speaker's text and its translation (toggle in settings)
+
+Closing the window hides it to the tray; use the tray menu → Quit to exit.
 
 ### Voice enrollment (direction A)
 
@@ -213,6 +233,7 @@ cargo test --release -p parrots-cli --test polish_ab -- --ignored --nocapture  #
 | `crates/platform-macos` | cpal capture/playback, resampling, device watcher, VPIO AEC |
 | `crates/engine` | language pack registry |
 | `apps/translator-cli` | the `parrots` CLI |
+| `app` | `parrots-app` menubar GUI (tray + egui) |
 | `driver/macos` | branded HAL audio driver (see licensing below) |
 
 ## License
