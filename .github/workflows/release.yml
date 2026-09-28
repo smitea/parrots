@@ -1,0 +1,68 @@
+# Release pipeline: on a v* tag, build the release binaries + the branded
+# audio driver pkg, vendor the sherpa-onnx dylibs into a source tarball, and
+# publish everything as a GitHub Release. The Homebrew tap formula/cask
+# (packaging/) consumes these artifacts.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Vendor sherpa-onnx shared libraries
+        run: ./scripts/download-models.sh --libs-only
+
+      - name: Build release binaries
+        run: cargo build --release --locked -p parrots-cli -p parrots-app
+
+      - name: Build audio driver pkg
+        run: |
+          cd driver/macos
+          ./build.sh
+          VERSION="${GITHUB_REF_NAME#v}"
+          ./make-pkg.sh "$VERSION"
+
+      - name: Create source tarball (includes vendored dylibs)
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          git archive --format=tar --prefix="parrots-$VERSION/" HEAD -o "parrots-$VERSION.tar"
+          tar -rf "parrots-$VERSION.tar" \
+            --transform "s|^vendor|parrots-$VERSION/vendor|" \
+            vendor/sherpa-onnx/lib
+          gzip "parrots-$VERSION.tar"
+          shasum -a 256 "parrots-$VERSION.tar.gz" | tee sha256-src.txt
+          shasum -a 256 "driver/macos/build/ParrotsAudio-$VERSION.pkg" | tee sha256-pkg.txt
+
+      - name: Show artifacts and checksums
+        run: |
+          ls -lh target/release/parrots target/release/parrots-app
+          cat sha256-src.txt sha256-pkg.txt
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            parrots-*.tar.gz
+            driver/macos/build/ParrotsAudio-*.pkg
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Print Homebrew tap update snippet
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          SRC_SHA=$(awk '{print $1}' sha256-src.txt)
+          PKG_SHA=$(awk '{print $1}' sha256-pkg.txt)
+          echo "::notice::Update the tap formula/cask:"
+          echo "  formula url sha256 = $SRC_SHA"
+          echo "  cask   url sha256 = $PKG_SHA"

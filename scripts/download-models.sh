@@ -3,6 +3,13 @@
 # Requires: curl >= 7.71 (needs --retry-all-errors)
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+# --libs-only: fetch just the sherpa-onnx shared libraries (used by CI to
+# vendor them into release source tarballs; skips all model downloads)
+LIBS_ONLY=0
+for arg in "$@"; do
+  case "$arg" in --libs-only) LIBS_ONLY=1 ;; esac
+done
 mkdir -p models/whisper models/vad models/mt/en-zh models/mt/zh-en models/tts/zipvoice models/asr/sensevoice vendor/sherpa-onnx/lib
 
 WORK=$(mktemp -d)
@@ -29,7 +36,10 @@ dl() {
   mv -f "$2.part" "$2"
 }
 
-# 1) whisper small (f16, Metal)
+# 1..4) models — skipped in --libs-only mode
+if [ "$LIBS_ONLY" -eq 1 ]; then
+  echo "--libs-only: skipping model downloads"
+else
 dl "$HF_BASE/ggerganov/whisper.cpp/resolve/main/ggml-small.bin" models/whisper/ggml-small.bin
 
 # 2) silero-vad v5
@@ -87,6 +97,8 @@ if [ ! -s models/asr/sensevoice/model.int8.onnx ]; then
   echo "== sensevoice directory =="; ls -la models/asr/sensevoice/
 fi
 
+fi  # end of --libs-only skip (models)
+
 # 6) sherpa-onnx shared libraries (macOS universal2)
 # v1.13.x asset name is osx-universal2-shared-lib.tar.bz2 (older releases: shared-libs)
 if [ ! -s vendor/sherpa-onnx/lib/libsherpa-onnx-c-api.dylib ]; then
@@ -105,11 +117,13 @@ fi
 echo "== sherpa libs =="; ls vendor/sherpa-onnx/lib/
 
 # 5) Qwen2.5-1.5B-Instruct (plan 7 text polish layer, GGUF Q4_K_M ~1GB; optional, not needed with polish off)
+if [ "$LIBS_ONLY" -eq 0 ]; then
 # Note: 0.5B (Q4/Q8) proved incapable of homophone repair in testing; bumped to 1.5B (selection notes in the polish-qwen crate docs)
 mkdir -p models/polish/qwen1.5b
 dl "$HF_BASE/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf" \
    models/polish/qwen1.5b/model.gguf
 dl "$HF_BASE/Qwen/Qwen2.5-1.5B-Instruct/resolve/main/tokenizer.json" \
    models/polish/qwen1.5b/tokenizer.json
+fi  # end of polish-model section
 
 echo "all set"
