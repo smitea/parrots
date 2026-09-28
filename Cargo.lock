@@ -2127,9 +2127,21 @@ dependencies = [
 name = "parrots-engine"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-trait",
+ "cpal",
+ "hound",
+ "parrots-asr-sensevoice",
+ "parrots-asr-whisper",
  "parrots-core",
+ "parrots-mt-opus",
+ "parrots-pipeline",
+ "parrots-platform-macos",
+ "parrots-tts-zipvoice",
+ "parrots-vad",
+ "tempfile",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

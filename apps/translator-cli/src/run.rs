@@ -3,6 +3,7 @@ use anyhow::Context;
 use parrots_core::{
     AudioPlatform, AudioSegment, DeviceId, Lang, SpeechDetector, VadConfig, VoiceProfile,
 };
+use parrots_engine::service as svc;
 use parrots_pipeline::{
     DirectionAPipeline, DirectionBPipeline, PipelineEvent, RollingVoiceprint, StageTimings,
     UtteranceAssembler,
@@ -178,7 +179,7 @@ pub async fn run_talk(args: TalkArgs) -> anyhow::Result<()> {
                     let pref = args.output_pref.clone();
                     std::sync::Arc::new(move || wire::resolve_talk_output_device(pref.as_deref()))
                 };
-                let recovery = crate::live_inc::DeviceRecovery {
+                let recovery = svc::DeviceRecovery {
                     initial_input: DeviceId(None),
                     // Migrate capture whenever the default input device changes (e.g. Bluetooth headphones connect)
                     resolve_input: std::sync::Arc::new(|| DeviceId(None)),
@@ -186,19 +187,23 @@ pub async fn run_talk(args: TalkArgs) -> anyhow::Result<()> {
                 };
                 // live: auto = off (preserves latency); with --polish on, enabled with an 800ms bound
                 let polisher = wire::build_polisher(args.polish, false);
+                let prebuilt = svc::Prebuilt {
+                    asr: src.asr.clone(),
+                    translator,
+                    tts: src.tts.clone(),
+                };
                 talk_live_incremental(
                     args.from,
                     args.asr,
-                    src.asr.clone(),
-                    translator,
-                    src.tts.clone(),
-                    voice,
+                    args.to,
+                    args.voice.clone(),
                     sink_device,
                     hotwords,
                     recovery,
                     args.aec,
                     polisher,
                     args.gate_playback,
+                    prebuilt,
                 )
                 .await
             } else {
@@ -228,75 +233,48 @@ pub fn hotwords_for_pipeline() -> Option<std::sync::Arc<parrots_pipeline::Hotwor
     }
 }
 
-/// Incremental talk live: shares the two-stage pipeline with direction B live; the voiceprint is the fixed personal profile
+/// Incremental talk live (direction A): thin shell over engine::service.
 #[allow(clippy::too_many_arguments)]
 async fn talk_live_incremental(
     from: Lang,
     asr_choice: wire::AsrChoice,
-    asr: std::sync::Arc<dyn parrots_core::AsrEngine>,
-    translator: std::sync::Arc<dyn parrots_core::Translator>,
-    tts: std::sync::Arc<dyn parrots_core::Synthesizer>,
-    voice: VoiceProfile,
+    to: Lang,
+    voice: String,
     sink_device: DeviceId,
     hotwords: Option<std::sync::Arc<parrots_pipeline::Hotwords>>,
-    recovery: crate::live_inc::DeviceRecovery,
+    recovery: svc::DeviceRecovery,
     aec: bool,
     polisher: Option<std::sync::Arc<dyn parrots_core::TextPolisher>>,
     gate_pref: Option<bool>,
+    prebuilt: svc::Prebuilt,
 ) -> anyhow::Result<()> {
-    let platform = MacAudioPlatform::new();
-    // Capture source: default to system VPIO echo cancellation (so the other side's speech over
-    // speakers is not mistakenly transcribed); on init failure fall back to plain capture +
-    // the existing time-based gate (belt and braces)
-    let (capture, aec_active): (Box<dyn parrots_core::AudioStream>, bool) = if aec {
-        match parrots_platform_macos::aec::AecCapture::open() {
-            Ok(c) => {
-                tracing::info!("Echo-cancelled capture (VPIO) enabled");
-                (Box::new(c), true)
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "VPIO init failed ({e}), falling back to plain capture + time-based gate"
-                );
-                (platform.open_capture(&DeviceId(None))?, false)
-            }
-        }
-    } else {
-        (platform.open_capture(&DeviceId(None))?, false)
-    };
-    // Playback gate (B4, plan 5 leftover): auto = off when AEC is active (capture interruptions
-    // disappear with it), on otherwise; --gate-playback true/false overrides manually
-    // (can force it on until no echo loop is confirmed on real hardware)
-    let gate_playback = gate_pref.unwrap_or(!aec_active);
-    tracing::info!(
-        "Playback gate: {} (AEC: {})",
-        if gate_playback { "on" } else { "off" },
-        if aec_active { "VPIO" } else { "none" }
-    );
-    let sink = platform.open_playback(&sink_device)?;
-    let vad = SileroVad::load(&wire::models_root().join("vad/silero_vad.onnx"))?;
-    let voice_source = crate::live_inc::VoiceSource::Fixed(voice);
-    println!("Live conversation mode (incremental): speak {from:?} into the microphone, clause translations play as you speak; Ctrl-C to exit");
-    let outcome = crate::live_inc::run_incremental_live(
-        capture,
-        sink,
-        vad,
-        crate::live_inc::IncrementalArgs {
-            asr,
-            translator,
-            tts,
-            voice_source,
-            from_lang: from,
-            hotwords,
-            tick_interval_samples: wire::incremental_tick_interval(asr_choice),
-            max_seconds: None,
-            collect: false,
-            gate_playback: true,
-            recovery: Some(recovery),
-            polisher,
+    let cfg = svc::ServiceConfig {
+        direction: svc::Direction::A,
+        from,
+        to,
+        voice: Some(voice),
+        voice_utterance: false,
+        input_device: DeviceId(None),
+        output_device: sink_device,
+        models_root: wire::models_root(),
+        profiles_dir: wire::profiles_dir(),
+        asr: match asr_choice {
+            wire::AsrChoice::Sensevoice => svc::AsrKind::Sensevoice,
+            wire::AsrChoice::Whisper => svc::AsrKind::Whisper,
         },
-    )
-    .await?;
+        hotwords,
+        polisher,
+        aec,
+        gate_playback: gate_pref,
+        max_seconds: None,
+        recovery: Some(recovery),
+        prebuilt: Some(prebuilt),
+        collect: false,
+    };
+    println!(
+        "Live conversation (incremental): speak {from:?} into the microphone, translated clauses play as you go; Ctrl-C to exit"
+    );
+    let outcome = svc::start(cfg, std::sync::Arc::new(|_| {}))?.wait()?;
     println!("{}", outcome.timings.report());
     Ok(())
 }

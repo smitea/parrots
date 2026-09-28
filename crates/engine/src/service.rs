@@ -1,14 +1,10 @@
-//! Incremental clause live pipeline (two stages: capture/segmentation + clause worker pool).
+//! Live translation service orchestration (engine composition root).
 //!
-//! - Capture thread (thread A): blocking-pull 16kHz chunks → VAD scoring → events, producing
-//!   (chunk, events); whole frames are dropped during playback-gate windows (same echo-loop
-//!   mitigation as the whole-utterance mode).
-//! - Segmentation task: rolling buffer + rolling ASR once per tick ([`IncrementalSegmenter`]),
-//!   submits clauses → bounded channel (depth 2, natural backpressure; submission order =
-//!   playback order).
-//! - Clause worker pool: a single-consumer task runs MT→TTS→sink in submission order
-//!   (single-consumer queues are naturally ordered, playback never interleaves); after writing
-//!   it updates the gate as "total remaining duration of unplayed clauses + 300ms margin".
+//! Hosts the incremental two-level pipeline (capture/segmentation + clause
+//! worker pool) shared by direction A (talk) and direction B (live), plus the
+//! [`start`] entry point used by both the CLI and the menubar app. The CLI is
+//! a thin shell that assembles a [`ServiceConfig`]; the app drives the same
+//! code path.
 
 use cpal::traits::{DeviceTrait, HostTrait};
 use std::sync::{Arc, Mutex};
@@ -143,6 +139,21 @@ pub struct IncrementalArgs {
     pub recovery: Option<DeviceRecovery>,
     /// Text polish layer (plan 7): after hotword correction, before MT; None = off (live defaults off)
     pub polisher: Option<Arc<dyn parrots_core::TextPolisher>>,
+    /// Optional event sink for UI consumers: Transcribed/Translated/Speaking
+    pub on_event: Option<Arc<dyn Fn(ServiceEvent) + Send + Sync>>,
+    /// Cooperative stop: set flag -> capture loop emits EOF and drains
+    pub stop_flag: Option<Arc<std::sync::atomic::AtomicBool>>,
+}
+
+/// Events surfaced to UI consumers (menubar app / captions overlay).
+#[derive(Debug, Clone)]
+pub enum ServiceEvent {
+    /// Final text for the current utterance segment (after hotword + polish)
+    Transcribed(String),
+    /// Translated text ready for synthesis
+    Translated(String),
+    /// Synthesized audio started playing (playback gate engaged)
+    Speaking,
 }
 
 /// Incremental pipeline output (handed back to the caller on exit for persistence/reporting).
@@ -181,6 +192,7 @@ pub async fn run_incremental_live(
     let gate_playback = args.gate_playback;
     let capture_thread = std::thread::spawn(move || {
         let mut capture = capture;
+        let stop_flag = args.stop_flag.clone();
         let platform = parrots_platform_macos::MacAudioPlatform::new();
         // Self-healing state: current capture device identity (explicit or default device name) and consecutive rebuild failures
         let mut cur_ident = recovery
@@ -219,6 +231,14 @@ pub async fn run_incremental_live(
         };
 
         loop {
+            // Cooperative stop wins over stream-error recovery
+            if stop_flag
+                .as_ref()
+                .is_some_and(|f| f.load(std::sync::atomic::Ordering::Relaxed))
+            {
+                let _ = ctx.blocking_send(CaptureMsg::Eof);
+                break;
+            }
             if let Some(n) = max_seconds {
                 if t0.elapsed() >= Duration::from_secs(n) {
                     let _ = ctx.blocking_send(CaptureMsg::Eof);
@@ -391,6 +411,7 @@ pub async fn run_incremental_live(
     let tts = args.tts.clone();
     let hotwords = args.hotwords.clone();
     let polisher = args.polisher.clone();
+    let on_event = args.on_event.clone();
     let voice_source = Arc::new(args.voice_source);
 
     let worker_task = tokio::spawn(async move {
@@ -413,6 +434,9 @@ pub async fn run_incremental_live(
             println!("Recognized: {corrected}");
             if corrected.trim().is_empty() {
                 continue;
+            }
+            if let Some(cb) = &on_event {
+                cb(ServiceEvent::Transcribed(corrected.clone()));
             }
             // Text polish layer (plan 7): after hotword correction, before MT; keeps the original text on failure/empty
             let corrected = match polisher.as_ref() {
@@ -443,6 +467,9 @@ pub async fn run_incremental_live(
             println!("Translation: {translated}");
             if translated.trim().is_empty() {
                 continue;
+            }
+            if let Some(cb) = &on_event {
+                cb(ServiceEvent::Translated(translated.clone()));
             }
             let voice = match voice_source
                 .voice_for(&clause_audio, &corrected, is_final)
@@ -516,6 +543,9 @@ pub async fn run_incremental_live(
                     t0.elapsed().as_millis() as u64 + played_ms as u64,
                     std::sync::atomic::Ordering::Relaxed,
                 );
+                if let Some(cb) = &on_event {
+                    cb(ServiceEvent::Speaking);
+                }
             }
 
             if !first_audio_recorded {
@@ -674,6 +704,8 @@ mod tests {
                 gate_playback: false,
                 recovery: None,
                 polisher: None,
+                on_event: None,
+                stop_flag: None,
             },
         )
         .await
@@ -749,6 +781,8 @@ mod tests {
                 gate_playback: false,
                 recovery: None,
                 polisher: None,
+                on_event: None,
+                stop_flag: None,
             },
         )
         .await
@@ -766,4 +800,329 @@ mod tests {
             "whisper incremental should record first audio latency"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Orchestration: config, engine assembly, start/stop handles
+// ---------------------------------------------------------------------------
+
+use crate::{Engine, LanguagePack};
+use parrots_core::Lang;
+
+/// Translation direction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    /// I speak -> listeners (fixed personal voiceprint)
+    A,
+    /// Listeners speak -> me (rolling voiceprint from their speech)
+    B,
+}
+
+/// ASR engine selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AsrKind {
+    /// SenseVoice-small (default; zh/en + punctuation, fastest)
+    Sensevoice,
+    /// whisper-small (Metal fallback)
+    Whisper,
+}
+
+impl AsrKind {
+    /// Rolling-ASR tick period in samples: SenseVoice RTF~0.05 -> 500ms;
+    /// whisper is slower, halve the rate to keep capture latency low.
+    pub fn default_tick_interval(self) -> usize {
+        match self {
+            AsrKind::Sensevoice => 8000,
+            AsrKind::Whisper => 16000,
+        }
+    }
+}
+
+/// Service configuration. Device IDs are resolved by the caller (CLI wire or
+/// the app settings) so the service stays device-policy free.
+pub struct ServiceConfig {
+    pub direction: Direction,
+    pub from: Lang,
+    pub to: Lang,
+    /// Direction A: voice profile name under `profiles_dir`
+    pub voice: Option<String>,
+    /// Direction B: rolling voiceprint granularity (true = per utterance)
+    pub voice_utterance: bool,
+    /// Resolved capture device (B: virtual speakers preferred; A: default mic)
+    pub input_device: DeviceId,
+    /// Resolved playback device (A: virtual mic for meeting mode; else default)
+    pub output_device: DeviceId,
+    pub models_root: std::path::PathBuf,
+    pub profiles_dir: std::path::PathBuf,
+    pub asr: AsrKind,
+    /// Hotword list (plan 6): applied before polish/MT; also injected into
+    /// the whisper initial prompt
+    pub hotwords: Option<Arc<parrots_pipeline::Hotwords>>,
+    /// Text polisher (plan 7): optional local LLM pass
+    pub polisher: Option<Arc<dyn parrots_core::TextPolisher>>,
+    /// Direction A: VoiceProcessingIO echo-cancelling capture (default on)
+    pub aec: bool,
+    /// Direction A: playback gate override; None = auto (off while AEC active)
+    pub gate_playback: Option<bool>,
+    /// Auto-exit after N seconds (None = run until stopped)
+    pub max_seconds: Option<u64>,
+    /// Device hot-swap self-healing (plan 3+ B2): closures re-resolve the
+    /// devices on topology change; None = no recovery (tests/fixtures)
+    pub recovery: Option<DeviceRecovery>,
+    /// Pre-assembled engine pieces (CLI already loaded them); when None the
+    /// service builds the engine from `models_root` itself
+    pub prebuilt: Option<Prebuilt>,
+    /// Collect synthesized audio in the outcome (for `--out` wav writing)
+    pub collect: bool,
+}
+
+/// Engine pieces handed over from a caller that already loaded them.
+pub struct Prebuilt {
+    pub asr: Arc<dyn parrots_core::AsrEngine>,
+    pub translator: Arc<dyn parrots_core::Translator>,
+    pub tts: Arc<dyn parrots_core::Synthesizer>,
+}
+
+/// Handle to a running service: stop it and collect the final outcome.
+pub struct RunningService {
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    join: Option<std::thread::JoinHandle<anyhow::Result<IncrementalOutcome>>>,
+}
+
+impl RunningService {
+    /// Signal the capture loop to finish and wait for drain.
+    pub fn stop(mut self) -> anyhow::Result<IncrementalOutcome> {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        let join = self
+            .join
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("service already stopped"))?;
+        join.join()
+            .map_err(|_| anyhow::anyhow!("service thread panicked"))?
+    }
+
+    /// Wait for natural completion (e.g. `max_seconds`), without stopping.
+    pub fn wait(mut self) -> anyhow::Result<IncrementalOutcome> {
+        let join = self
+            .join
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("service already stopped"))?;
+        join.join()
+            .map_err(|_| anyhow::anyhow!("service thread panicked"))?
+    }
+}
+
+/// Capture wrapper: turns the stop flag into a stream EOF so the pipeline
+/// drains naturally (current utterance is finalized, stats preserved).
+struct StopOnFlag {
+    inner: Box<dyn AudioStream>,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl AudioStream for StopOnFlag {
+    fn sample_rate(&self) -> u32 {
+        self.inner.sample_rate()
+    }
+    fn next_chunk(&mut self) -> Option<Vec<f32>> {
+        if self.stop.load(std::sync::atomic::Ordering::Relaxed) {
+            return None;
+        }
+        self.inner.next_chunk()
+    }
+}
+
+/// Start a background service thread running the incremental pipeline.
+pub fn start(
+    cfg: ServiceConfig,
+    on_event: Arc<dyn Fn(ServiceEvent) + Send + Sync>,
+) -> anyhow::Result<RunningService> {
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stop_flag = stop.clone();
+    let join = std::thread::Builder::new()
+        .name("parrots-service".into())
+        .spawn(move || {
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()?;
+            let outcome = rt.block_on(run_service(cfg, on_event, stop_flag));
+            rt.shutdown_timeout(Duration::from_millis(500));
+            outcome
+        })
+        .map_err(|e| anyhow::anyhow!("failed to spawn service thread: {e}"))?;
+    Ok(RunningService {
+        stop,
+        join: Some(join),
+    })
+}
+
+async fn run_service(
+    cfg: ServiceConfig,
+    on_event: Arc<dyn Fn(ServiceEvent) + Send + Sync>,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+) -> anyhow::Result<IncrementalOutcome> {
+    use parrots_platform_macos::MacAudioPlatform;
+    use parrots_vad::SileroVad;
+
+    let platform = MacAudioPlatform::new();
+    let (asr, translator, tts) = match cfg.prebuilt {
+        Some(p) => (p.asr, p.translator, p.tts),
+        None => {
+            let engine = build_engine(&cfg.models_root, cfg.asr, cfg.hotwords.as_ref())?;
+            let src = engine.pack(cfg.from).ok_or_else(|| {
+                anyhow::anyhow!("missing language pack for {from:?}", from = cfg.from)
+            })?;
+            let translator = engine.translator(cfg.from, cfg.to).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "missing translator {from:?}->{to:?}",
+                    from = cfg.from,
+                    to = cfg.to
+                )
+            })?;
+            (src.asr.clone(), translator, src.tts.clone())
+        }
+    };
+    let vad = SileroVad::load(&cfg.models_root.join("vad/silero_vad.onnx"))?;
+
+    let (voice_source, capture, gate_playback, _voice_dir) = match cfg.direction {
+        Direction::A => {
+            // Fixed personal voiceprint from the enrolled profile
+            let name = cfg
+                .voice
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("direction A requires a voice profile name"))?;
+            let wav = cfg.profiles_dir.join(format!("{name}.wav"));
+            let txt = cfg.profiles_dir.join(format!("{name}.txt"));
+            anyhow::ensure!(
+                wav.is_file() && txt.is_file(),
+                "voice profile missing: {name} (run `parrots enroll --name {name}` first)"
+            );
+            let voice = VoiceProfile::from_prompt(wav, std::fs::read_to_string(txt)?);
+            // AEC capture with automatic fallback to the plain capture path
+            let (capture, aec_active): (Box<dyn AudioStream>, bool) = if cfg.aec {
+                match parrots_platform_macos::aec::AecCapture::open() {
+                    Ok(c) => {
+                        tracing::info!("echo-cancelling capture (VPIO) enabled");
+                        (Box::new(c), true)
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "VPIO init failed ({e}), falling back to plain capture + playback gate"
+                        );
+                        (platform.open_capture(&cfg.input_device)?, false)
+                    }
+                }
+            } else {
+                (platform.open_capture(&cfg.input_device)?, false)
+            };
+            // Gate override wins; auto = gate off while AEC is active
+            let gate_playback = cfg.gate_playback.unwrap_or(!aec_active);
+            tracing::info!(
+                "playback gate: {} (AEC: {})",
+                if gate_playback { "on" } else { "off" },
+                if aec_active { "VPIO" } else { "none" }
+            );
+            (VoiceSource::Fixed(voice), capture, gate_playback, None)
+        }
+        Direction::B => {
+            // Rolling voiceprint dir lives for the whole session
+            let tmp = tempfile::tempdir()?;
+            let voice_source = if cfg.voice_utterance {
+                VoiceSource::RollingUtterance(Arc::new(std::sync::Mutex::new(
+                    parrots_pipeline::UtteranceRollingVoiceprint::new(tmp.path(), 2)?,
+                )))
+            } else {
+                VoiceSource::Rolling(Arc::new(std::sync::Mutex::new(
+                    parrots_pipeline::RollingVoiceprint::new(tmp.path(), 2)?,
+                )))
+            };
+            let capture = platform.open_capture(&cfg.input_device)?;
+            // Direction B always gates playback (translation plays locally
+            // while capturing the remote feed; VPIO does not apply here)
+            (voice_source, capture, true, Some(tmp))
+        }
+    };
+
+    let sink = platform.open_playback(&cfg.output_device)?;
+
+    let outcome = run_incremental_live(
+        Box::new(StopOnFlag {
+            inner: capture,
+            stop: stop.clone(),
+        }),
+        sink,
+        vad,
+        IncrementalArgs {
+            asr,
+            translator,
+            tts,
+            voice_source,
+            from_lang: cfg.from,
+            hotwords: cfg.hotwords.clone(),
+            tick_interval_samples: cfg.asr.default_tick_interval(),
+            max_seconds: cfg.max_seconds,
+            collect: cfg.collect,
+            gate_playback,
+            recovery: cfg.recovery,
+            polisher: cfg.polisher,
+            on_event: Some(on_event),
+            stop_flag: Some(stop),
+        },
+    )
+    .await?;
+    Ok(outcome)
+}
+
+/// Assemble the two-language engine (en/zh) from the models root.
+/// Mirrors the former CLI `wire::build_engine`.
+pub fn build_engine(
+    models_root: &std::path::Path,
+    asr: AsrKind,
+    hotwords: Option<&Arc<parrots_pipeline::Hotwords>>,
+) -> anyhow::Result<Engine> {
+    use parrots_asr_sensevoice::SenseVoiceAsr;
+    use parrots_asr_whisper::WhisperAsr;
+    use parrots_mt_opus::MarianTranslator;
+    use parrots_tts_zipvoice::ZipvoiceTts;
+
+    let initial_prompt = hotwords.filter(|h| !h.is_empty()).map(|h| {
+        tracing::info!("{} hotwords injected into the whisper decode bias", h.len());
+        h.prompt_text()
+    });
+    let asr_engine: Arc<dyn parrots_core::AsrEngine> = match asr {
+        AsrKind::Whisper => Arc::new(WhisperAsr::load(
+            &models_root.join("whisper/ggml-small.bin"),
+            &[Lang::En, Lang::Zh],
+            initial_prompt,
+        )?),
+        AsrKind::Sensevoice => Arc::new(SenseVoiceAsr::load(
+            &models_root.join("asr/sensevoice"),
+            &[Lang::En, Lang::Zh],
+        )?),
+    };
+    let mt_en_zh = MarianTranslator::load(&models_root.join("mt/en-zh"), Lang::En, Lang::Zh)?;
+    let mt_zh_en = MarianTranslator::load(&models_root.join("mt/zh-en"), Lang::Zh, Lang::En)?;
+    let tts_en = ZipvoiceTts::load(&models_root.join("tts/zipvoice"))?;
+    let tts_zh = ZipvoiceTts::load(&models_root.join("tts/zipvoice"))?;
+    // Warm up MT/TTS sessions so the first clause is not penalized
+    mt_en_zh.warmup()?;
+    mt_zh_en.warmup()?;
+    tts_en.warmup()?;
+    tts_zh.warmup()?;
+
+    let en = LanguagePack {
+        lang: Lang::En,
+        asr: asr_engine.clone(),
+        translators: vec![Arc::new(mt_en_zh)],
+        tts: Arc::new(tts_en),
+    };
+    let zh = LanguagePack {
+        lang: Lang::Zh,
+        asr: asr_engine,
+        translators: vec![Arc::new(mt_zh_en)],
+        tts: Arc::new(tts_zh),
+    };
+    let mut e = Engine::new();
+    e.register(en);
+    e.register(zh);
+    Ok(e)
 }

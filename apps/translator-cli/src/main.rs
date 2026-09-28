@@ -1,6 +1,5 @@
 mod doctor;
 mod enroll;
-mod live_inc;
 mod run;
 mod wire;
 
@@ -9,7 +8,6 @@ use clap::{Parser, Subcommand};
 use parrots_core::{AudioPlatform, AudioSegment, DeviceId, Lang, SpeechDetector, VadConfig};
 use parrots_pipeline::{
     DirectionBPipeline, PipelineEvent, RollingVoiceprint, StageTimings, UtteranceAssembler,
-    UtteranceRollingVoiceprint,
 };
 use parrots_platform_macos::MacAudioPlatform;
 use parrots_vad::{SileroVad, VAD_FRAME};
@@ -393,6 +391,10 @@ async fn live(
 /// Incremental mode: two-stage pipeline of capture/segmentation + clause worker pool (shared by direction B live and talk_live)
 /// Device hot-switching (plan 3+ Phase B): automatically rebuilds the stream on plug/unplug or Bluetooth changes; the current utterance is dropped.
 #[allow(clippy::too_many_arguments)]
+/// Incremental mode (direction B live): thin shell over engine::service.
+/// Engine assembly, capture, recovery and the pipeline all live in the
+/// service; this only resolves devices, assembles config and writes outputs.
+#[allow(clippy::too_many_arguments)]
 async fn live_incremental(
     from: Lang,
     to: Lang,
@@ -407,57 +409,46 @@ async fn live_incremental(
     let engine = wire::build_engine(asr)?;
     let src = engine.pack(from).context("language pack missing")?;
     let translator = engine.translator(from, to).context("translator missing")?;
-    let platform = MacAudioPlatform::new();
     let capture_device = wire::resolve_input_device(device_pref.as_deref());
-    let capture = platform.open_capture(&capture_device)?;
-    let vad = SileroVad::load(&wire::models_root().join("vad/silero_vad.onnx"))?;
-    let sink = platform.open_playback(&DeviceId(None))?;
-    let tmp = tempfile::tempdir()?;
-    let voice_source = if voice_utterance {
-        live_inc::VoiceSource::RollingUtterance(Arc::new(std::sync::Mutex::new(
-            UtteranceRollingVoiceprint::new(tmp.path(), 2)?,
-        )))
-    } else {
-        live_inc::VoiceSource::Rolling(Arc::new(std::sync::Mutex::new(RollingVoiceprint::new(
-            tmp.path(),
-            2,
-        )?)))
-    };
-    let hotwords = run::hotwords_for_pipeline();
-    let resolve_input = {
-        let pref = device_pref.clone();
-        Arc::new(move || wire::resolve_input_device(pref.as_deref()))
-    };
-    let recovery = live_inc::DeviceRecovery {
-        initial_input: capture_device,
-        resolve_input,
-        // Live translation playback uses the system default speaker: on write failure rebuild with the default output (headphone plug/unplug migration)
+    let recovery = parrots_engine::service::DeviceRecovery {
+        initial_input: capture_device.clone(),
+        resolve_input: {
+            let pref = device_pref.clone();
+            Arc::new(move || wire::resolve_input_device(pref.as_deref()))
+        },
         resolve_output: Arc::new(|| DeviceId(None)),
+    };
+    let cfg = parrots_engine::service::ServiceConfig {
+        direction: parrots_engine::service::Direction::B,
+        from,
+        to,
+        voice: None,
+        voice_utterance,
+        input_device: capture_device,
+        output_device: DeviceId(None),
+        models_root: wire::models_root(),
+        profiles_dir: wire::profiles_dir(),
+        asr: match asr {
+            wire::AsrChoice::Sensevoice => parrots_engine::service::AsrKind::Sensevoice,
+            wire::AsrChoice::Whisper => parrots_engine::service::AsrKind::Whisper,
+        },
+        hotwords: run::hotwords_for_pipeline(),
+        polisher: wire::build_polisher(polish, false),
+        aec: false,
+        gate_playback: None,
+        max_seconds,
+        recovery: Some(recovery),
+        prebuilt: Some(parrots_engine::service::Prebuilt {
+            asr: src.asr.clone(),
+            translator,
+            tts: src.tts.clone(),
+        }),
+        collect: out.is_some(),
     };
     tracing::info!(
         "Incremental mode: speak {from:?}, translations play clause-by-clause; Ctrl-C to exit"
     );
-    let outcome = live_inc::run_incremental_live(
-        capture,
-        sink,
-        vad,
-        live_inc::IncrementalArgs {
-            asr: src.asr.clone(),
-            translator,
-            tts: src.tts.clone(),
-            voice_source,
-            from_lang: from,
-            hotwords,
-            tick_interval_samples: wire::incremental_tick_interval(asr),
-            max_seconds,
-            collect: out.is_some(),
-            gate_playback: true,
-            recovery: Some(recovery),
-            // live: auto = off (preserves latency); with --polish on, enabled with an 800ms bound
-            polisher: wire::build_polisher(polish, false),
-        },
-    )
-    .await?;
+    let outcome = parrots_engine::service::start(cfg, Arc::new(|_| {}))?.wait()?;
     tracing::info!("{}", outcome.timings.report());
     if let Some(out) = &out {
         let sr = outcome
@@ -471,7 +462,7 @@ async fn live_incremental(
             .flat_map(|a| a.samples.iter().copied())
             .collect();
         wire::write_wav(out, &AudioSegment::new(merged, sr))?;
-        println!("Translation audio → {}", out.display());
+        println!("Translated audio -> {}", out.display());
     }
     if let Some(report) = &report {
         let t = &outcome.timings;

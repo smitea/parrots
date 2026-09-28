@@ -105,15 +105,6 @@ pub fn models_root() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("models"))
 }
 
-/// Rolling ASR period for the incremental pipeline (samples): SenseVoice RTF~0.05 → 500ms;
-/// whisper-small is slower, throttled to 1s to avoid dragging capture
-pub fn incremental_tick_interval(choice: AsrChoice) -> usize {
-    match choice {
-        AsrChoice::Sensevoice => 8000,
-        AsrChoice::Whisper => 16000,
-    }
-}
-
 pub fn profiles_dir() -> PathBuf {
     std::env::var_os("PARROTS_PROFILES")
         .map(PathBuf::from)

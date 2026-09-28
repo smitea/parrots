@@ -116,3 +116,5 @@ mod tests {
         assert_eq!(e.langs(), vec![Lang::En]);
     }
 }
+
+pub mod service;

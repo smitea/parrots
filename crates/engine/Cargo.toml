@@ -5,7 +5,20 @@ version.workspace = true
 
 [dependencies]
 parrots-core = { path = "../core" }
+parrots-pipeline = { path = "../pipeline" }
+parrots-platform-macos = { path = "../platform-macos" }
+parrots-asr-sensevoice = { path = "../asr-sensevoice" }
+parrots-asr-whisper = { path = "../asr-whisper" }
+parrots-mt-opus = { path = "../mt-opus" }
+parrots-tts-zipvoice = { path = "../tts-zipvoice" }
+parrots-vad = { path = "../vad" }
+anyhow.workspace = true
+tokio = { workspace = true, features = ["full"] }
+tracing.workspace = true
+cpal.workspace = true
+tempfile.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 async-trait.workspace = true
+hound.workspace = true
