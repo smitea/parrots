@@ -12,6 +12,7 @@ members = [
     "crates/platform-macos",
     "crates/engine",
     "apps/translator-cli",
+    "app",
 ]
 
 [workspace.package]

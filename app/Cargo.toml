@@ -1,0 +1,26 @@
+[package]
+name = "parrots-app"
+edition.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "parrots-app"
+path = "src/main.rs"
+
+[dependencies]
+parrots-core = { path = "../crates/core" }
+parrots-engine = { path = "../crates/engine" }
+parrots-platform-macos = { path = "../crates/platform-macos" }
+parrots-pipeline = { path = "../crates/pipeline" }
+parrots-polish-qwen = { path = "../crates/polish-qwen" }
+eframe = "0.31"
+egui = "0.31"
+tray-icon = "0.24"
+image = { version = "0.25", default-features = false, features = ["png"] }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+crossbeam-channel = "0.5"
